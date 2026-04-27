@@ -850,8 +850,9 @@
       progressText.textContent = pct.toFixed(1) + '%';
     });
 
-    // FFmpeg yükle - ESM core paketi (worker dosyasını ayrı yayınladığı için sorunsuz)
-    // jsDelivr CDN'den: cross-origin başlıkları doğru, blob URL'e çevirebiliyoruz
+    // FFmpeg yükle - single-thread core@0.12.10 ESM
+    // Bu sürüm worker dosyasını ayrı yayınlıyor, blob URL ile sorunsuz çalışır
+    // Single-thread olduğu için SharedArrayBuffer/cross-origin isolation gerektirmez
     statusText.textContent = 'FFmpeg core indiriliyor (~31 MB, sadece ilk seferde)...';
 
     const toBlobURL = async (url, mimeType) => {
@@ -861,19 +862,11 @@
       return URL.createObjectURL(new Blob([blob], { type: mimeType }));
     };
 
-    // Multi-thread core - worker.js dosyasını ayrı yayınladığı için sorunsuz çalışır
-    const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.6/dist/esm';
-
-    const [coreURL, wasmURL, workerURL] = await Promise.all([
-      toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-      toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-      toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript'),
-    ]);
+    const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm';
 
     await ffmpeg.load({
-      coreURL,
-      wasmURL,
-      workerURL,
+      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
       classWorkerURL: await toBlobURL('ffmpeg/814.ffmpeg.js', 'text/javascript'),
     });
 
