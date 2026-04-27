@@ -850,7 +850,9 @@
       progressText.textContent = pct.toFixed(1) + '%';
     });
 
-    // FFmpeg dosyalarını yerel yoldan yükle (cross-origin sorunlarını önler)
+    // FFmpeg dosyalarını yükle:
+    // - Worker ve core JS dosyaları yerel repodan (cross-origin sorununu önler)
+    // - WASM dosyası jsDelivr CDN'den (GitHub 25MB limiti yüzünden)
     statusText.textContent = 'FFmpeg core indiriliyor...';
 
     const toBlobURL = async (url, mimeType) => {
@@ -862,7 +864,7 @@
 
     await ffmpeg.load({
       coreURL: await toBlobURL('ffmpeg/ffmpeg-core.js', 'text/javascript'),
-      wasmURL: await toBlobURL('ffmpeg/ffmpeg-core.wasm', 'application/wasm'),
+      wasmURL: await toBlobURL('https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm', 'application/wasm'),
       classWorkerURL: await toBlobURL('ffmpeg/814.ffmpeg.js', 'text/javascript'),
     });
 
