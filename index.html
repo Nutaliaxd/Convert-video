@@ -721,8 +721,8 @@
 
 </div>
 
-<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
-<script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+<script src="ffmpeg/ffmpeg.js"></script>
+<script src="ffmpeg/util.js"></script>
 <script>
   const { FFmpeg } = FFmpegWASM;
   const { fetchFile } = FFmpegUtil;
@@ -850,7 +850,7 @@
       progressText.textContent = pct.toFixed(1) + '%';
     });
 
-    // FFmpeg dosyalarını blob URL üzerinden yükle (cross-origin worker sorununu çözer)
+    // FFmpeg dosyalarını yerel yoldan yükle (cross-origin sorunlarını önler)
     statusText.textContent = 'FFmpeg core indiriliyor...';
 
     const toBlobURL = async (url, mimeType) => {
@@ -860,13 +860,10 @@
       return URL.createObjectURL(new Blob([blob], { type: mimeType }));
     };
 
-    const coreBaseURL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd';
-    const ffmpegBaseURL = 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd';
-
     await ffmpeg.load({
-      coreURL: await toBlobURL(`${coreBaseURL}/ffmpeg-core.js`, 'text/javascript'),
-      wasmURL: await toBlobURL(`${coreBaseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-      classWorkerURL: await toBlobURL(`${ffmpegBaseURL}/814.ffmpeg.js`, 'text/javascript'),
+      coreURL: await toBlobURL('ffmpeg/ffmpeg-core.js', 'text/javascript'),
+      wasmURL: await toBlobURL('ffmpeg/ffmpeg-core.wasm', 'application/wasm'),
+      classWorkerURL: await toBlobURL('ffmpeg/814.ffmpeg.js', 'text/javascript'),
     });
 
     loadingBanner.classList.remove('active');
@@ -970,7 +967,14 @@
 
     } catch (err) {
       console.error(err);
-      showError(err.message || 'Dönüşüm başarısız oldu. Dosya formatı desteklenmiyor olabilir.');
+      const errMsg = err.message || String(err);
+      let userMsg;
+      if (errMsg.includes('import') || errMsg.includes('Worker') || errMsg.includes('load')) {
+        userMsg = 'FFmpeg motoru yüklenemedi. Sayfayı yenileyin (Ctrl+Shift+R) ve tekrar deneyin. Detay: ' + errMsg;
+      } else {
+        userMsg = errMsg;
+      }
+      showError(userMsg);
       statusText.textContent = '✗ Hata oluştu';
     } finally {
       convertBtn.disabled = false;
