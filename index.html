@@ -850,10 +850,9 @@
       progressText.textContent = pct.toFixed(1) + '%';
     });
 
-    // FFmpeg dosyalarını yükle:
-    // - Worker ve core JS dosyaları yerel repodan (cross-origin sorununu önler)
-    // - WASM dosyası jsDelivr CDN'den (GitHub 25MB limiti yüzünden)
-    statusText.textContent = 'FFmpeg core indiriliyor...';
+    // FFmpeg yükle - ESM core paketi (worker dosyasını ayrı yayınladığı için sorunsuz)
+    // jsDelivr CDN'den: cross-origin başlıkları doğru, blob URL'e çevirebiliyoruz
+    statusText.textContent = 'FFmpeg core indiriliyor (~31 MB, sadece ilk seferde)...';
 
     const toBlobURL = async (url, mimeType) => {
       const response = await fetch(url);
@@ -862,9 +861,19 @@
       return URL.createObjectURL(new Blob([blob], { type: mimeType }));
     };
 
+    // Multi-thread core - worker.js dosyasını ayrı yayınladığı için sorunsuz çalışır
+    const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.6/dist/esm';
+
+    const [coreURL, wasmURL, workerURL] = await Promise.all([
+      toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+      toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+      toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript'),
+    ]);
+
     await ffmpeg.load({
-      coreURL: await toBlobURL('ffmpeg/ffmpeg-core.js', 'text/javascript'),
-      wasmURL: await toBlobURL('https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm', 'application/wasm'),
+      coreURL,
+      wasmURL,
+      workerURL,
       classWorkerURL: await toBlobURL('ffmpeg/814.ffmpeg.js', 'text/javascript'),
     });
 
