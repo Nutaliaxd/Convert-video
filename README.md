@@ -2,10 +2,6 @@
 
 Tarayıcıda çalışan video & ses dönüştürücü. Tüm video formatlarını **MP4**'e, ses formatlarını **AAC**'ye dönüştürür. Dosyalar hiçbir sunucuya yüklenmez — tüm işlem tarayıcıda yapılır.
 
-## Canlı Demo
-
-`https://KULLANICI-ADIN.github.io/REPO-ADIN/`
-
 ## Özellikler
 
 - 🎬 Tüm video formatları → MP4 (H.264 + AAC)
