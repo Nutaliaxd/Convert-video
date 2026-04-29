@@ -850,10 +850,16 @@
       progressText.textContent = pct.toFixed(1) + '%';
     });
 
-    // FFmpeg yükle - single-thread core@0.12.10 ESM
-    // Bu sürüm worker dosyasını ayrı yayınlıyor, blob URL ile sorunsuz çalışır
-    // Single-thread olduğu için SharedArrayBuffer/cross-origin isolation gerektirmez
-    statusText.textContent = 'FFmpeg core indiriliyor (~31 MB, sadece ilk seferde)...';
+    // FFmpeg yükle - akıllı seçim:
+    // - SharedArrayBuffer varsa: multi-thread (2-4x hızlı)
+    // - Yoksa: single-thread (her ortamda çalışır)
+    const useMT = window.crossOriginIsolated && typeof SharedArrayBuffer !== 'undefined';
+
+    if (useMT) {
+      statusText.textContent = 'FFmpeg multi-thread indiriliyor (~31 MB, sadece ilk seferde)...';
+    } else {
+      statusText.textContent = 'FFmpeg single-thread indiriliyor (~31 MB, sadece ilk seferde)...';
+    }
 
     const toBlobURL = async (url, mimeType) => {
       const response = await fetch(url);
@@ -862,13 +868,35 @@
       return URL.createObjectURL(new Blob([blob], { type: mimeType }));
     };
 
-    const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm';
+    if (useMT) {
+      // Multi-thread sürüm - 2-4x hız
+      const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.6/dist/esm';
+      const [coreURL, wasmURL, workerURL] = await Promise.all([
+        toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+        toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+        toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript'),
+      ]);
+      await ffmpeg.load({
+        coreURL,
+        wasmURL,
+        workerURL,
+        classWorkerURL: await toBlobURL('ffmpeg/814.ffmpeg.js', 'text/javascript'),
+      });
+    } else {
+      // Single-thread sürüm - güvenli fallback
+      const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm';
+      await ffmpeg.load({
+        coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+        wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
+        classWorkerURL: await toBlobURL('ffmpeg/814.ffmpeg.js', 'text/javascript'),
+      });
+    }
 
-    await ffmpeg.load({
-      coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
-      wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-      classWorkerURL: await toBlobURL('ffmpeg/814.ffmpeg.js', 'text/javascript'),
-    });
+    // Üst köşedeki durum göstergesini güncelle
+    const sysStatus = document.getElementById('systemStatus');
+    if (sysStatus) {
+      sysStatus.textContent = useMT ? 'MULTI-THREAD HAZIR' : 'SINGLE-THREAD HAZIR';
+    }
 
     loadingBanner.classList.remove('active');
     return ffmpeg;
@@ -923,8 +951,14 @@
           outputName
         ];
       } else {
+        // Multi-thread mod aktifse mevcut tüm çekirdekleri kullan
+        const threadCount = (window.crossOriginIsolated && navigator.hardwareConcurrency)
+          ? Math.min(navigator.hardwareConcurrency, 8).toString()
+          : '1';
+
         args = [
           '-i', inputName,
+          '-threads', threadCount,
           '-c:v', 'libx264',
           '-preset', 'ultrafast',
           '-crf', '23',
