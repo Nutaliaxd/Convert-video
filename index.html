@@ -827,16 +827,26 @@ async function loadFFmpeg() {
   statusText.textContent = 'FFmpeg motoru yükleniyor...';
 
   /*
-   * @ffmpeg/ffmpeg ESM build'ini blob URL üzerinden import ediyoruz.
-   * Bu sayede:
-   *  1) ffmpeg'in kendi içindeki Worker da blob URL ile spawn edilir → CORS yok
-   *  2) core-mt ile AV1/HEVC/VP9 desteği sağlanır
-   *  3) crossOriginIsolated coi-serviceworker.js tarafından sağlanır
+   * @ffmpeg/ffmpeg@0.12.10 ESM build içinde "./worker.js" referansı var.
+   * Bunu da blob'a çevirip kaynak koduna patch uyguluyoruz.
+   * Böylece Worker da doğru URL'den spawn ediliyor.
    */
-  const ffmpegBlobURL = await toBlobURL(
-    'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm/ffmpeg.js',
+  const workerBlobURL = await toBlobURL(
+    'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/worker.js',
     'text/javascript'
   );
+
+  // ffmpeg.js kaynağını çek, worker referansını patch'le, sonra import et
+  const ffmpegRes  = await fetch('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/ffmpeg.js');
+  let   ffmpegSrc  = await ffmpegRes.text();
+  ffmpegSrc = ffmpegSrc.replace(/new Worker\(new URL\(["']\.\/worker\.js["'][^)]*\)/g,
+    `new Worker("${workerBlobURL}", { type: "module" }`);
+  // Alternatif pattern
+  ffmpegSrc = ffmpegSrc.replace(/new URL\(["']\.\/worker\.js["'],\s*import\.meta\.url\)/g,
+    `new URL("${workerBlobURL}")`);
+
+  const ffmpegBlob   = new Blob([ffmpegSrc], { type: 'text/javascript' });
+  const ffmpegBlobURL = URL.createObjectURL(ffmpegBlob);
 
   const { FFmpeg } = await import(ffmpegBlobURL);
 
