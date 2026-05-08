@@ -708,8 +708,9 @@ input[type="file"] { display: none; }
 
 <!--
   FFmpeg.wasm CDN'den yükleniyor.
-  @ffmpeg/ffmpeg v0.12.x + @ffmpeg/core v0.12.10 (UMD build)
-  UMD build, SharedArrayBuffer gerektirmez — crossOriginIsolated zorunlu değil.
+  @ffmpeg/ffmpeg v0.12.x + @ffmpeg/core-mt v0.12.10 (multi-thread, AV1 destekli)
+  core-mt; AV1, HEVC dahil tüm codec'leri destekler.
+  SharedArrayBuffer gerektirir — coi-serviceworker.js bunu sağlar.
 -->
 <script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/umd/ffmpeg.js"></script>
 <script>
@@ -823,7 +824,18 @@ async function loadFFmpeg() {
 
   ffmpeg = new FFmpeg();
 
-  ffmpeg.on('log', ({ message }) => addLog(message));
+  ffmpeg._failed = false;
+
+  ffmpeg.on('log', ({ message }) => {
+    addLog(message);
+    if (
+      message.includes('Conversion failed') ||
+      message.includes('Aborted()') ||
+      message.includes('Failed to get pixel format')
+    ) {
+      ffmpeg._failed = true;
+    }
+  });
 
   ffmpeg.on('progress', ({ progress }) => {
     const pct = Math.min(Math.max(progress * 100, 0), 100);
@@ -840,18 +852,19 @@ async function loadFFmpeg() {
   };
 
   /*
-   * UMD / single-thread core kullanıyoruz.
-   * Bu build SharedArrayBuffer GEREKTİRMEZ,
-   * dolayısıyla crossOriginIsolated zorunlu değil.
+   * core-mt (multi-thread) kullanıyoruz — AV1, HEVC, VP9 dahil tüm codec'leri destekler.
+   * SharedArrayBuffer gerektirir; coi-serviceworker.js bunu sağlar.
+   * crossOriginIsolated aktif değilse sayfa zaten service worker tarafından
+   * yeniden yüklenecek ve izolasyon sağlanacaktır.
    */
-  const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd';
+  const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.10/dist/esm';
 
   statusText.textContent = 'FFmpeg core indiriliyor (~31 MB, sadece ilk seferde)...';
 
   await ffmpeg.load({
-    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`,   'text/javascript'),
-    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
-    /* classWorkerURL YOK — single-thread modda gereksiz */
+    coreURL:        await toBlobURL(`${baseURL}/ffmpeg-core.js`,        'text/javascript'),
+    wasmURL:        await toBlobURL(`${baseURL}/ffmpeg-core.wasm`,      'application/wasm'),
+    workerURL:      await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript'),
   });
 
   loadingBanner.classList.remove('active');
@@ -880,6 +893,7 @@ convertBtn.addEventListener('click', async () => {
 
   try {
     const ff = await loadFFmpeg();
+    ff._failed = false; // her dönüşümde sıfırla
 
     const isAudio  = isAudioFile(selectedFile);
     const ext      = selectedFile.name.match(/\.[^.]+$/)?.[0] || '';
@@ -901,9 +915,27 @@ convertBtn.addEventListener('click', async () => {
 
     await ff.exec(args);
 
+    /* FFmpeg log'larında hata işareti var mı? */
+    if (ff._failed) {
+      throw new Error(
+        'Dönüştürme başarısız oldu. Video, bu build\'in desteklemediği ' +
+        'bir codec içeriyor (örn. AV1, HEVC). Lütfen farklı bir video deneyin.'
+      );
+    }
+
     statusText.textContent = 'Dosya hazırlanıyor...';
 
     const data     = await ff.readFile(outputName);
+
+    /* Dönüşüm sessizce başarısız oldu mu? (AV1 gibi desteklenmeyen codec) */
+    if (!data || data.length === 0 || ff._failed) {
+      throw new Error(
+        'Dönüştürme başarısız oldu — çıktı dosyası boş. ' +
+        'Video AV1 veya HEVC gibi desteklenmeyen bir codec içeriyor olabilir. ' +
+        'Farklı bir video deneyin.'
+      );
+    }
+
     const mimeType = isAudio ? 'audio/aac' : 'video/mp4';
     const blob     = new Blob([data.buffer], { type: mimeType });
     resultBlobUrl  = URL.createObjectURL(blob);
