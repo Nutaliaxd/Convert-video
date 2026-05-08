@@ -707,11 +707,15 @@ input[type="file"] { display: none; }
 </div>
 
 <!--
-  FFmpeg tamamen blob URL üzerinden yükleniyor.
-  Böylece CORS ve Worker erişim sorunları aşılır.
-  Yükleme JS içinde yapılıyor — burada <script src> yok.
+  ffmpeg.js ve 814.ffmpeg.js dosyaları repoda yerel olarak bulunmalı.
+  Worker, ffmpeg.js ile aynı origin'de olduğu için CORS sorunu yaşanmaz.
 -->
-<script type="module">
+<script src="ffmpeg.js"></script>
+<script src="ffmpeg-util.js"></script>
+<script>
+const { FFmpeg }    = FFmpegWASM;
+const { fetchFile } = FFmpegUtil;
+
 const $ = (id) => document.getElementById(id);
 
 const dropZone      = $('dropZone');
@@ -731,7 +735,7 @@ let selectedFile  = null;
 let ffmpeg        = null;
 let resultBlobUrl = null;
 
-/* ─── Yardımcı: CDN dosyasını blob URL'ye çevir (CORS + Worker sorununu aşar) ─── */
+/* ─── Blob URL yardımcısı (core-mt dosyaları için hâlâ gerekli) ─── */
 async function toBlobURL(url, mimeType) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Yüklenemedi: ${url} (${res.status})`);
@@ -826,32 +830,7 @@ async function loadFFmpeg() {
   loadingBanner.classList.add('active');
   statusText.textContent = 'FFmpeg motoru yükleniyor...';
 
-  /*
-   * @ffmpeg/ffmpeg@0.12.10 ESM build içinde "./worker.js" referansı var.
-   * Bunu da blob'a çevirip kaynak koduna patch uyguluyoruz.
-   * Böylece Worker da doğru URL'den spawn ediliyor.
-   */
-  const workerBlobURL = await toBlobURL(
-    'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/worker.js',
-    'text/javascript'
-  );
-
-  // ffmpeg.js kaynağını çek, worker referansını patch'le, sonra import et
-  const ffmpegRes  = await fetch('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/esm/ffmpeg.js');
-  let   ffmpegSrc  = await ffmpegRes.text();
-  ffmpegSrc = ffmpegSrc.replace(/new Worker\(new URL\(["']\.\/worker\.js["'][^)]*\)/g,
-    `new Worker("${workerBlobURL}", { type: "module" }`);
-  // Alternatif pattern
-  ffmpegSrc = ffmpegSrc.replace(/new URL\(["']\.\/worker\.js["'],\s*import\.meta\.url\)/g,
-    `new URL("${workerBlobURL}")`);
-
-  const ffmpegBlob   = new Blob([ffmpegSrc], { type: 'text/javascript' });
-  const ffmpegBlobURL = URL.createObjectURL(ffmpegBlob);
-
-  const { FFmpeg } = await import(ffmpegBlobURL);
-
   ffmpeg = new FFmpeg();
-
   ffmpeg._failed = false;
 
   ffmpeg.on('log', ({ message }) => {
@@ -873,7 +852,8 @@ async function loadFFmpeg() {
 
   /*
    * core-mt: AV1, HEVC, VP9 dahil tüm codec'leri destekler.
-   * workerURL da blob'a çevrilir → Worker CORS sorunu yok.
+   * ffmpeg.js (UMD) yerel repoda, 814.ffmpeg.js (worker) de aynı origin'de.
+   * Sadece core-mt dosyaları CDN'den blob URL olarak çekiliyor.
    */
   const coreBase = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.10/dist/esm';
 
