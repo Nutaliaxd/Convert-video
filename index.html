@@ -707,15 +707,11 @@ input[type="file"] { display: none; }
 </div>
 
 <!--
-  FFmpeg.wasm CDN'den yükleniyor.
-  @ffmpeg/ffmpeg v0.12.x + @ffmpeg/core-mt v0.12.10 (multi-thread, AV1 destekli)
-  core-mt; AV1, HEVC dahil tüm codec'leri destekler.
-  SharedArrayBuffer gerektirir — coi-serviceworker.js bunu sağlar.
+  FFmpeg tamamen blob URL üzerinden yükleniyor.
+  Böylece CORS ve Worker erişim sorunları aşılır.
+  Yükleme JS içinde yapılıyor — burada <script src> yok.
 -->
-<script src="https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/umd/ffmpeg.js"></script>
-<script>
-const { FFmpeg } = FFmpegWASM;
-
+<script type="module">
 const $ = (id) => document.getElementById(id);
 
 const dropZone      = $('dropZone');
@@ -734,6 +730,14 @@ const loadingBanner = $('loadingBanner');
 let selectedFile  = null;
 let ffmpeg        = null;
 let resultBlobUrl = null;
+
+/* ─── Yardımcı: CDN dosyasını blob URL'ye çevir (CORS + Worker sorununu aşar) ─── */
+async function toBlobURL(url, mimeType) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Yüklenemedi: ${url} (${res.status})`);
+  const blob = await res.blob();
+  return URL.createObjectURL(new Blob([blob], { type: mimeType }));
+}
 
 /* ─── Yardımcı fonksiyonlar ─── */
 
@@ -820,7 +824,21 @@ async function loadFFmpeg() {
   if (ffmpeg) return ffmpeg;
 
   loadingBanner.classList.add('active');
-  statusText.textContent = 'FFmpeg motoru indiriliyor...';
+  statusText.textContent = 'FFmpeg motoru yükleniyor...';
+
+  /*
+   * @ffmpeg/ffmpeg ESM build'ini blob URL üzerinden import ediyoruz.
+   * Bu sayede:
+   *  1) ffmpeg'in kendi içindeki Worker da blob URL ile spawn edilir → CORS yok
+   *  2) core-mt ile AV1/HEVC/VP9 desteği sağlanır
+   *  3) crossOriginIsolated coi-serviceworker.js tarafından sağlanır
+   */
+  const ffmpegBlobURL = await toBlobURL(
+    'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.15/dist/esm/ffmpeg.js',
+    'text/javascript'
+  );
+
+  const { FFmpeg } = await import(ffmpegBlobURL);
 
   ffmpeg = new FFmpeg();
 
@@ -843,28 +861,18 @@ async function loadFFmpeg() {
     progressText.textContent = pct.toFixed(1) + '%';
   });
 
-  /* Blob URL yardımcısı — CORS sorunlarını aşar */
-  const toBlobURL = async (url, mimeType) => {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Yüklenemedi: ${url} (${res.status})`);
-    const blob = await res.blob();
-    return URL.createObjectURL(new Blob([blob], { type: mimeType }));
-  };
-
   /*
-   * core-mt (multi-thread) kullanıyoruz — AV1, HEVC, VP9 dahil tüm codec'leri destekler.
-   * SharedArrayBuffer gerektirir; coi-serviceworker.js bunu sağlar.
-   * crossOriginIsolated aktif değilse sayfa zaten service worker tarafından
-   * yeniden yüklenecek ve izolasyon sağlanacaktır.
+   * core-mt: AV1, HEVC, VP9 dahil tüm codec'leri destekler.
+   * workerURL da blob'a çevrilir → Worker CORS sorunu yok.
    */
-  const baseURL = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.10/dist/esm';
+  const coreBase = 'https://cdn.jsdelivr.net/npm/@ffmpeg/core-mt@0.12.10/dist/esm';
 
   statusText.textContent = 'FFmpeg core indiriliyor (~31 MB, sadece ilk seferde)...';
 
   await ffmpeg.load({
-    coreURL:        await toBlobURL(`${baseURL}/ffmpeg-core.js`,        'text/javascript'),
-    wasmURL:        await toBlobURL(`${baseURL}/ffmpeg-core.wasm`,      'application/wasm'),
-    workerURL:      await toBlobURL(`${baseURL}/ffmpeg-core.worker.js`, 'text/javascript'),
+    coreURL:   await toBlobURL(`${coreBase}/ffmpeg-core.js`,        'text/javascript'),
+    wasmURL:   await toBlobURL(`${coreBase}/ffmpeg-core.wasm`,      'application/wasm'),
+    workerURL: await toBlobURL(`${coreBase}/ffmpeg-core.worker.js`, 'text/javascript'),
   });
 
   loadingBanner.classList.remove('active');
@@ -895,14 +903,13 @@ convertBtn.addEventListener('click', async () => {
     const ff = await loadFFmpeg();
     ff._failed = false; // her dönüşümde sıfırla
 
-    const isAudio  = isAudioFile(selectedFile);
-    const ext      = selectedFile.name.match(/\.[^.]+$/)?.[0] || '';
+    const isAudio    = isAudioFile(selectedFile);
+    const ext        = selectedFile.name.match(/\.[^.]+$/)?.[0] || '';
     const inputName  = 'input' + ext;
     const outputName = isAudio ? 'output.aac' : 'output.mp4';
 
     statusText.textContent = 'Dosya hazırlanıyor...';
 
-    /* Dosyayı FFmpeg sanal dosya sistemine yaz */
     const fileData = await selectedFile.arrayBuffer();
     await ff.writeFile(inputName, new Uint8Array(fileData));
 
@@ -915,25 +922,18 @@ convertBtn.addEventListener('click', async () => {
 
     await ff.exec(args);
 
-    /* FFmpeg log'larında hata işareti var mı? */
     if (ff._failed) {
       throw new Error(
-        'Dönüştürme başarısız oldu. Video, bu build\'in desteklemediği ' +
-        'bir codec içeriyor (örn. AV1, HEVC). Lütfen farklı bir video deneyin.'
+        'Dönüştürme başarısız oldu. Video desteklenmeyen bir codec içeriyor olabilir.'
       );
     }
 
-    statusText.textContent = 'Dosya hazırlanıyor...';
+    statusText.textContent = 'Dosya okunuyor...';
 
-    const data     = await ff.readFile(outputName);
+    const data = await ff.readFile(outputName);
 
-    /* Dönüşüm sessizce başarısız oldu mu? (AV1 gibi desteklenmeyen codec) */
-    if (!data || data.length === 0 || ff._failed) {
-      throw new Error(
-        'Dönüştürme başarısız oldu — çıktı dosyası boş. ' +
-        'Video AV1 veya HEVC gibi desteklenmeyen bir codec içeriyor olabilir. ' +
-        'Farklı bir video deneyin.'
-      );
+    if (!data || data.length === 0) {
+      throw new Error('Çıktı dosyası boş — dönüştürme sessizce başarısız oldu.');
     }
 
     const mimeType = isAudio ? 'audio/aac' : 'video/mp4';
@@ -949,14 +949,13 @@ convertBtn.addEventListener('click', async () => {
     $('resultFileMeta').textContent =
       `${formatBytes(blob.size)} · ${isAudio ? 'AAC SES' : 'MP4 VİDEO'} · HAZIR`;
 
-    progressBar.style.width   = '100%';
-    progressText.textContent  = '100%';
-    statusText.textContent    = '✓ Tamamlandı';
+    progressBar.style.width  = '100%';
+    progressText.textContent = '100%';
+    statusText.textContent   = '✓ Tamamlandı';
     resultArea.classList.add('active');
 
     setTimeout(() => resultArea.scrollIntoView({ behavior: 'smooth', block: 'center' }), 200);
 
-    /* Geçici dosyaları temizle */
     try { await ff.deleteFile(inputName);  } catch(_) {}
     try { await ff.deleteFile(outputName); } catch(_) {}
 
@@ -965,9 +964,9 @@ convertBtn.addEventListener('click', async () => {
     const msg = err.message || String(err);
     let userMsg;
 
-    if (msg.includes('fetch') || msg.includes('load') || msg.includes('Worker')) {
-      userMsg = 'FFmpeg motoru yüklenemedi. Sayfayı yenileyin (Ctrl+Shift+R) ve tekrar deneyin. Detay: ' + msg;
-    } else if (msg.includes('wasm')) {
+    if (msg.includes('fetch') || msg.includes('import') || msg.includes('load')) {
+      userMsg = 'FFmpeg motoru yüklenemedi. İnternet bağlantınızı kontrol edip sayfayı yenileyin (Ctrl+Shift+R). Detay: ' + msg;
+    } else if (msg.includes('wasm') || msg.includes('WebAssembly')) {
       userMsg = 'WebAssembly hatası. Chrome veya Edge tarayıcısını deneyin. Detay: ' + msg;
     } else {
       userMsg = msg;
